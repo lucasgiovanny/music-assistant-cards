@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - 2026-10-14
+
+- `ma-now-playing` shows the cover through Home Assistant's media proxy, so it appears on an
+  HTTPS connection (the companion app, remote access) instead of being blocked as plain HTTP
+
 ## 0.1.0 - 2026-10-14
 
 - First release, three cards in one file, drawn to sit beside the Daylight Calendar Card and

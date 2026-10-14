@@ -4,7 +4,7 @@
  * Licensed under MIT. See LICENSE.
  */
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const LONG_PRESS_MS = 500;
 // Lets the helpers be imported by the Node tests, where there is no DOM.
 const ElementBase = typeof HTMLElement === 'undefined' ? class {} : HTMLElement;
@@ -368,7 +368,7 @@ class MaNowPlaying extends ElementBase {
     const stateObj = this._stateObj;
     const a = stateObj?.attributes || {};
     const compact = !!this._config.compact;
-    const signature = JSON.stringify([stateObj?.state, a.media_title, a.media_artist, a.entity_picture, a.volume_level, a.shuffle, a.repeat, a.is_volume_muted, a.media_duration, compact, lang]);
+    const signature = JSON.stringify([stateObj?.state, a.media_title, a.media_artist, a.entity_picture_local, a.entity_picture, a.volume_level, a.shuffle, a.repeat, a.is_volume_muted, a.media_duration, compact, lang]);
     if (signature === this._signature || this._dragging) {
       this._updateProgress();
       return;
@@ -381,7 +381,8 @@ class MaNowPlaying extends ElementBase {
     const playing = stateObj?.state === 'playing';
     const title = idle ? t(lang, 'nothing_playing') : a.media_title;
     const artist = idle ? (this._config.name || a.friendly_name || '') : [a.media_artist, a.media_album_name].filter(Boolean).join(' · ');
-    const picture = a.entity_picture && !idle ? a.entity_picture : null;
+    // The HA proxy URL works over HTTPS and away from home; the raw Music Assistant URL is plain LAN HTTP.
+    const picture = idle ? null : (a.entity_picture_local || a.entity_picture || null);
     const volume = Math.round((Number(a.volume_level) || 0) * 100);
     const repeatIcon = a.repeat === 'one' ? 'mdi:repeat-once' : (a.repeat === 'all' ? 'mdi:repeat' : 'mdi:repeat-off');
     const duration = Number(a.media_duration) || 0;
