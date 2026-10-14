@@ -38,8 +38,10 @@ mood_reset_option: Nenhum
 | `color` | `var(--primary-color)` | Outline of the playing cover |
 | `mood_entity`, `mood_reset_option` | — | Set this `input_select` to this option when a playlist starts |
 | `config_entry_id` | from the entity | Music Assistant config entry, if it cannot be read from the entity registry |
+| `tabs` | `[playlists]` | Any of `playlists`, `recent` (songs played last), `favorites` (favourite songs); empty tabs hide |
 
-Tap a cover to play it now; hold it for *Play next* or *Add to queue*.
+Tap a playlist to play it now; tap a song to put it next in the queue. Hold either for
+*Play now*, *Play next*, *Add to queue* or *Radio*.
 
 ## `ma-now-playing`
 
@@ -49,8 +51,9 @@ entity: media_player.living_room_2
 compact: false
 ```
 
-Options: `entity` (required), `compact`, `color`, `name` (shown when nothing plays). Tap the
-cover for the more-info dialog.
+Options: `entity` (required), `compact`, `color`, `name` (shown when nothing plays), `radio`
+(adds a *More like this* button that swaps what comes after the current song for similar ones).
+Tap the cover for the more-info dialog.
 
 ## `ma-queue`
 
@@ -60,20 +63,26 @@ Needs the [Music Assistant Queue Actions](https://github.com/droans/mass_queue) 
 ```yaml
 type: custom:ma-queue
 entity: media_player.living_room_2
+search: true
 limit: 25
-max_height: 640px
+max_height: 420px
 ```
 
 | Option | Default | Description |
 |---|---|---|
 | `entity` | — | **Required.** A Music Assistant `media_player` |
+| `search` | `false` | Show a search box; results replace the queue while there is a query |
 | `limit` | `25` | Items shown after the current one |
 | `max_height` | none | Scroll inside the card past this height |
 | `title` | *Up next* | Header. `""` hides it |
 | `color` | `var(--primary-color)` | Accent of the current item |
 
 The list starts at the current track and refreshes when the track changes. Tap an item to
-jump to it; hold it for *Play now*, *Play next* or *Remove from queue*. Covers use the copy
+jump to it; hold it for *Play now*, *Play next*, *Move up*, *Move down* or *Remove from queue*.
+
+With `search: true`, typing searches every Music Assistant provider for songs, albums, artists
+and playlists. Tapping a result puts it next in the queue, jukebox style; holding it offers
+*Play now*, *Play next*, *Add to queue* and *Radio*. Covers use the copy
 `mass_queue` encodes when its *download local* option is on, so they show over HTTPS too.
 
 ## `mood-buttons`

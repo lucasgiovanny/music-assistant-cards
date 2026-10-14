@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { selectPlaylists, formatDuration, isActiveMood, resolveLanguage, t, upcomingItems, queueImage } from '../dist/music-assistant-cards.js';
+import { selectPlaylists, formatDuration, isActiveMood, resolveLanguage, t, upcomingItems, queueImage, safeImage, searchGroups, mediaRow, toastFor } from '../dist/music-assistant-cards.js';
 
 const library = [
   { name: 'Infinite Mix (library)', uri: 'library://playlist/7', image: 'a.jpg' },
@@ -55,4 +55,34 @@ test('queue images prefer the encoded copy and skip plain HTTP on HTTPS pages', 
   assert.equal(queueImage({ media_image: 'http://x/a.jpg' }, false), 'http://x/a.jpg');
   assert.equal(queueImage({ media_image: 'https://i.scdn.co/a.jpg' }, true), 'https://i.scdn.co/a.jpg');
   assert.equal(queueImage({}, false), null);
+});
+
+test('search results become rows grouped by type, empty groups dropped', () => {
+  const groups = searchGroups({
+    tracks: [{ media_type: 'track', uri: 'spotify://track/1', name: 'Preciso Me Encontrar', image: 'https://i/a.jpg', artists: [{ name: 'Cartola' }] }],
+    albums: [{ media_type: 'album', uri: 'spotify://album/1', name: 'Cartola (1976)', image: null, artists: [{ name: 'Cartola' }] }],
+    artists: [],
+    playlists: [{ uri: 'spotify://playlist/1', name: 'Samba', owner: 'Spotify' }, { name: 'no uri' }],
+    radio: [{ uri: 'x' }]
+  });
+  assert.deepEqual(Object.keys(groups), ['tracks', 'albums', 'playlists']);
+  assert.deepEqual(groups.tracks[0], { name: 'Preciso Me Encontrar', uri: 'spotify://track/1', media_type: 'track', image: 'https://i/a.jpg', subtitle: 'Cartola' });
+  assert.equal(groups.playlists[0].media_type, 'playlist');
+  assert.equal(groups.playlists[0].subtitle, 'Spotify');
+  assert.deepEqual(searchGroups(null), {});
+  assert.equal(searchGroups({ tracks: Array.from({ length: 12 }, (_, i) => ({ uri: `u${i}`, name: 'n' })) }, 5).tracks.length, 5);
+});
+
+test('images accept a path object and skip plain HTTP on HTTPS', () => {
+  assert.equal(safeImage({ path: 'https://x/a.jpg' }, true), 'https://x/a.jpg');
+  assert.equal(safeImage('http://mass.local/a.jpg', true), null);
+  assert.equal(safeImage(null, false), null);
+  assert.equal(mediaRow({ uri: 'u', name: 'n', album: { image: 'https://x/b.jpg' } }, 'track').image, 'https://x/b.jpg');
+});
+
+test('the toast says where the song went', () => {
+  assert.equal(toastFor('pt', { name: 'Alvorada' }, 'next'), 'A seguir: Alvorada');
+  assert.equal(toastFor('pt', { name: 'Alvorada' }, 'add'), 'No fim da fila: Alvorada');
+  assert.equal(toastFor('pt', { name: 'Alvorada' }, 'replace', true), 'Rádio a partir de Alvorada');
+  assert.equal(toastFor('en', { name: 'Alvorada' }, 'play'), 'Playing Alvorada');
 });

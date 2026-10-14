@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 - 2026-10-14
+
+- `ma-queue` `search: true`: a search box over every Music Assistant provider. A tapped result
+  goes next in the queue; holding offers *Play now*, *Play next*, *Add to queue* and *Radio*
+- `ma-queue`: *Move up* and *Move down* in the item menu
+- `ma-playlist-grid` `tabs`: *Recent* and *Favourites* songs beside the playlists; a tapped song
+  goes next in the queue, and the menu gains *Radio*
+- `ma-now-playing` `radio: true`: a *More like this* button
+- Typing in the search box no longer triggers Home Assistant's keyboard shortcuts
+
 ## 0.2.0 - 2026-10-14
 
 - `ma-queue`: the play queue from the current track on, through the `mass_queue`

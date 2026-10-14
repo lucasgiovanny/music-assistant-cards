@@ -1,11 +1,12 @@
 /* Music Assistant Cards
  * Lovelace cards drawn to sit beside the Daylight Calendar Card and the Shopping List
- * Card: a playlist cover grid, a now-playing panel, the play queue and mood buttons.
+ * Card: a playlist cover grid, a now-playing panel, the play queue with search and mood buttons.
  * Licensed under MIT. See LICENSE.
  */
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const LONG_PRESS_MS = 500;
+const SEARCH_DEBOUNCE_MS = 400;
 // Lets the helpers be imported by the Node tests, where there is no DOM.
 const ElementBase = typeof HTMLElement === 'undefined' ? class {} : HTMLElement;
 
@@ -27,7 +28,23 @@ const STRINGS = {
     queue_missing: 'Install the Music Assistant Queue Actions integration (mass_queue)',
     now: 'Now',
     remove: 'Remove from queue',
-    more_in_queue: '+{n} more in the queue'
+    more_in_queue: '+{n} more in the queue',
+    move_up: 'Move up',
+    move_down: 'Move down',
+    search: 'Search songs, artists…',
+    tracks: 'Songs',
+    albums: 'Albums',
+    artists: 'Artists',
+    no_results: 'Nothing found',
+    radio: 'Radio',
+    more_like_this: 'More like this',
+    queued_next: 'Up next: {name}',
+    queued_end: 'Added to the queue: {name}',
+    playing: 'Playing {name}',
+    radio_started: 'Radio from {name}',
+    recent: 'Recent',
+    favorites: 'Favourites',
+    empty: 'Nothing here yet'
   },
   pt: {
     playlists: 'Playlists',
@@ -46,7 +63,23 @@ const STRINGS = {
     queue_missing: 'Instale a integração Music Assistant Queue Actions (mass_queue)',
     now: 'Agora',
     remove: 'Remover da fila',
-    more_in_queue: '+{n} na fila'
+    more_in_queue: '+{n} na fila',
+    move_up: 'Subir',
+    move_down: 'Descer',
+    search: 'Pesquisar músicas, artistas…',
+    tracks: 'Músicas',
+    albums: 'Álbuns',
+    artists: 'Artistas',
+    no_results: 'Nada encontrado',
+    radio: 'Rádio',
+    more_like_this: 'Mais como esta',
+    queued_next: 'A seguir: {name}',
+    queued_end: 'No fim da fila: {name}',
+    playing: 'Tocando {name}',
+    radio_started: 'Rádio a partir de {name}',
+    recent: 'Recentes',
+    favorites: 'Favoritas',
+    empty: 'Nada aqui ainda'
   }
 };
 
@@ -69,10 +102,10 @@ export function selectPlaylists(libraryItems, { include, extra } = {}) {
   const fromLibrary = (libraryItems || [])
     .filter((item) => item && item.uri)
     .filter((item) => !wanted || wanted.includes(normalizeName(item.name)) || wanted.includes(normalizeName(item.uri)))
-    .map((item) => ({ name: item.name, uri: item.uri, image: item.image || null }));
+    .map((item) => ({ name: item.name, uri: item.uri, image: item.image || null, media_type: 'playlist' }));
   const extras = (Array.isArray(extra) ? extra : [])
     .filter((item) => item && item.uri)
-    .map((item) => ({ name: item.name || item.uri, uri: item.uri, image: item.image || null }));
+    .map((item) => ({ name: item.name || item.uri, uri: item.uri, image: item.image || null, media_type: 'playlist' }));
   const seen = new Set();
   return [...fromLibrary, ...extras]
     .filter((item) => (seen.has(item.uri) ? false : seen.add(item.uri)))
@@ -98,13 +131,41 @@ export function upcomingItems(items, currentId, limit) {
   return list.slice(start, start + Math.max(1, Number(limit) || 1)).map((item) => ({ ...item, current: item.queue_item_id === currentId }));
 }
 
-// Prefers the image mass_queue already encoded; a plain-HTTP URL would be blocked on an HTTPS page.
+// A plain-HTTP image (Music Assistant's own server) would be blocked on an HTTPS page.
+export function safeImage(url, secure) {
+  const value = typeof url === 'string' ? url : url?.path || '';
+  if (!value || (secure && value.startsWith('http://'))) return null;
+  return value;
+}
+
+// Prefers the image mass_queue already encoded.
 export function queueImage(item, secure) {
   const encoded = item?.local_image_encoded;
   if (encoded) return String(encoded).startsWith('data:') ? encoded : `data:image;base64,${encoded}`;
-  const url = item?.media_image || '';
-  if (!url || (secure && url.startsWith('http://'))) return null;
-  return url;
+  return safeImage(item?.media_image, secure);
+}
+
+// A Music Assistant library or search item as a display row.
+export function mediaRow(item, fallbackType) {
+  return {
+    name: item.name,
+    uri: item.uri,
+    media_type: item.media_type || fallbackType,
+    image: item.image || item.album?.image || null,
+    subtitle: (item.artists || []).map((artist) => artist.name).filter(Boolean).join(', ') || item.owner || ''
+  };
+}
+
+const SEARCH_TYPES = ['tracks', 'albums', 'artists', 'playlists'];
+
+// Search results grouped by type, without empty groups.
+export function searchGroups(response, limit = 8) {
+  const groups = {};
+  for (const type of SEARCH_TYPES) {
+    const items = (response?.[type] || []).filter((item) => item && item.uri).slice(0, limit).map((item) => mediaRow(item, type.slice(0, -1)));
+    if (items.length) groups[type] = items;
+  }
+  return groups;
 }
 
 function escapeHtml(value) {
@@ -113,29 +174,143 @@ function escapeHtml(value) {
 
 const BASE_STYLES = `
   :host { display: block; }
-  ha-card { background: none; box-shadow: none; border: none; padding: 0; color: var(--primary-text-color); }
+  ha-card { background: none; box-shadow: none; border: none; padding: 0; color: var(--primary-text-color); position: relative; }
   .tile { background: var(--mac-item-background, rgba(127, 127, 127, 0.16)); border-radius: 10px; }
   .warning { padding: 12px; color: var(--warning-color, #ffa600); font-size: 14px; }
   .muted { color: var(--secondary-text-color); }
+  .pad { padding: 12px 4px; font-size: 14px; }
+  .header { font-size: 16px; font-weight: 500; padding: 4px 2px 12px; }
   button { font: inherit; color: inherit; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 2px 12px; }
+  .chip { border: none; cursor: pointer; padding: 6px 12px; border-radius: 16px; background: rgba(127,127,127,0.16); font-size: 13px; font-weight: 500; }
+  .chip.on { background: var(--mac-accent); color: var(--text-primary-color, #fff); }
+  .overlay { position: fixed; inset: 0; z-index: 9; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .menu { width: 100%; max-width: 320px; background: var(--card-background-color, #1c1f24); border-radius: 14px; padding: 8px; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+  .menu h3 { margin: 8px 12px 6px; font-size: 15px; font-weight: 500; }
+  .menu button { border: none; background: none; text-align: left; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+  .menu button:hover { background: rgba(127,127,127,0.16); }
+  .menu .cancel { color: var(--secondary-text-color); }
+  .toast { position: absolute; left: 50%; bottom: 12px; transform: translate(-50%, 8px); opacity: 0; pointer-events: none; transition: opacity 0.2s, transform 0.2s; background: var(--mac-accent); color: var(--text-primary-color, #fff); font-size: 13px; font-weight: 500; padding: 8px 14px; border-radius: 18px; max-width: 90%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+`;
+
+const ROW_STYLES = `
+  .list { padding: 6px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 6px; border-radius: 8px; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .row:hover { background: rgba(127,127,127,0.12); }
+  .row.current .name { color: var(--mac-accent); }
+  .thumb { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: rgba(127,127,127,0.18); color: var(--secondary-text-color); --mdc-icon-size: 22px; }
+  .thumb.round { border-radius: 50%; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .text { flex: 1; min-width: 0; }
+  .name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .artist { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: var(--mac-accent); color: var(--text-primary-color, #fff); }
 `;
 
 function fireMoreInfo(node, entityId) {
   node.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId }, bubbles: true, composed: true }));
 }
 
+// A short tap runs the default action, a long press opens the menu.
+function bindPress(el, onTap, onLong) {
+  let timer = null;
+  let longPressed = false;
+  const cancel = () => clearTimeout(timer);
+  el.addEventListener('pointerdown', () => {
+    longPressed = false;
+    timer = setTimeout(() => {
+      longPressed = true;
+      onLong();
+    }, LONG_PRESS_MS);
+  });
+  el.addEventListener('pointerup', cancel);
+  el.addEventListener('pointerleave', cancel);
+  el.addEventListener('pointercancel', cancel);
+  el.addEventListener('contextmenu', (event) => event.preventDefault());
+  el.addEventListener('click', () => {
+    if (!longPressed) onTap();
+  });
+}
+
+function fallbackImages(root, icon) {
+  root.querySelectorAll('img').forEach((img) => img.addEventListener('error', () => {
+    img.replaceWith(Object.assign(document.createElement('ha-icon'), { icon }));
+  }, { once: true }));
+}
+
+function showToast(root, text) {
+  let toast = root.querySelector('.toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'toast';
+    root.querySelector('ha-card')?.appendChild(toast);
+  }
+  if (!toast) return;
+  toast.textContent = text;
+  toast.classList.add('show');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => toast.classList.remove('show'), 2500);
+}
+
+function playMedia(hass, entityId, item, enqueue, radio = false) {
+  const data = { media_id: item.uri, media_type: item.media_type, enqueue };
+  if (radio) data.radio_mode = true;
+  return hass.callService('music_assistant', 'play_media', data, { entity_id: entityId });
+}
+
+// Media menu entries: label key, enqueue mode, radio.
+const MEDIA_MENU = [['play_now', 'play', false], ['play_next', 'next', false], ['add_queue', 'add', false], ['radio', 'replace', true]];
+const ENQUEUE_TOAST = { play: 'playing', replace: 'playing', next: 'queued_next', add: 'queued_end' };
+
+export function toastFor(lang, item, enqueue, radio = false) {
+  return t(lang, radio ? 'radio_started' : ENQUEUE_TOAST[enqueue]).replace('{name}', item?.name || '');
+}
+
+function menuHtml(lang, title, entries) {
+  return `
+    <div class="overlay"><div class="menu" role="menu">
+      <h3>${escapeHtml(title)}</h3>
+      ${entries.map(([key], index) => `<button data-entry="${index}">${escapeHtml(t(lang, key))}</button>`).join('')}
+      <button class="cancel" data-close>${escapeHtml(t(lang, 'cancel'))}</button>
+    </div></div>`;
+}
+
+function bindMenu(host, entries, onPick, onClose) {
+  const overlay = host.querySelector('.overlay');
+  if (!overlay) return;
+  overlay.addEventListener('click', (event) => event.target === overlay && onClose());
+  overlay.querySelector('[data-close]').addEventListener('click', onClose);
+  overlay.querySelectorAll('[data-entry]').forEach((button) => button.addEventListener('click', () => onPick(entries[Number(button.dataset.entry)])));
+}
+
+async function configEntryId(hass, config) {
+  if (config.config_entry_id) return config.config_entry_id;
+  const entry = await hass.callWS({ type: 'config/entity_registry/get', entity_id: config.entity });
+  return entry?.config_entry_id;
+}
+
+function isSecure() {
+  return typeof location !== 'undefined' && location.protocol === 'https:';
+}
+
 /* ---------------------------------------------------------------- */
 /* Playlist grid                                                     */
 /* ---------------------------------------------------------------- */
+
+const GRID_TABS = ['playlists', 'recent', 'favorites'];
+const TRACK_QUERIES = { recent: { order_by: 'last_played_desc' }, favorites: { favorite: true } };
 
 class MaPlaylistGrid extends ElementBase {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
     this._library = null;
+    this._tracks = {};
     this._error = false;
     this._menu = null;
     this._lastUri = null;
+    this._tab = 'playlists';
   }
 
   static getStubConfig(hass) {
@@ -146,6 +321,9 @@ class MaPlaylistGrid extends ElementBase {
   setConfig(config) {
     if (!config?.entity) throw new Error('entity is required');
     this._config = { shuffle: true, ...config };
+    const tabs = (Array.isArray(config.tabs) ? config.tabs : []).filter((tab) => GRID_TABS.includes(tab));
+    this._tabs = tabs.length ? tabs : ['playlists'];
+    this._tab = this._tabs[0];
     try { this._lastUri = localStorage.getItem(`ma-playlist-grid:${config.entity}`); } catch (e) { /* storage blocked */ }
     this._render();
   }
@@ -165,23 +343,27 @@ class MaPlaylistGrid extends ElementBase {
     return { columns: 12, rows: 'auto', min_columns: 4 };
   }
 
-  async _configEntryId() {
-    if (this._config.config_entry_id) return this._config.config_entry_id;
-    const entry = await this._hass.callWS({ type: 'config/entity_registry/get', entity_id: this._config.entity });
-    return entry?.config_entry_id;
+  async _libraryItems(entryId, mediaType, extra) {
+    const result = await this._hass.callWS({
+      type: 'call_service',
+      domain: 'music_assistant',
+      service: 'get_library',
+      service_data: { config_entry_id: entryId, media_type: mediaType, ...extra },
+      return_response: true
+    });
+    return result?.response?.items || [];
   }
 
   async _load() {
     try {
-      const configEntryId = await this._configEntryId();
-      const result = await this._hass.callWS({
-        type: 'call_service',
-        domain: 'music_assistant',
-        service: 'get_library',
-        service_data: { config_entry_id: configEntryId, media_type: 'playlist', limit: 500 },
-        return_response: true
-      });
-      this._library = result?.response?.items || [];
+      const entryId = await configEntryId(this._hass, this._config);
+      const trackTabs = this._tabs.filter((tab) => TRACK_QUERIES[tab]);
+      const [playlists, ...tracks] = await Promise.all([
+        this._libraryItems(entryId, 'playlist', { limit: 500 }),
+        ...trackTabs.map((tab) => this._libraryItems(entryId, 'track', { limit: 18, ...TRACK_QUERIES[tab] }))
+      ]);
+      this._library = playlists;
+      trackTabs.forEach((tab, index) => { this._tracks[tab] = tracks[index].map((item) => mediaRow(item, 'track')); });
       this._error = false;
     } catch (e) {
       this._error = true;
@@ -190,23 +372,38 @@ class MaPlaylistGrid extends ElementBase {
     this._render();
   }
 
-  _play(uri, enqueue = 'replace') {
+  // Tabs with something to show; playlists always stays.
+  _visibleTabs() {
+    return this._tabs.filter((tab) => tab === 'playlists' || (this._tracks[tab] || []).length);
+  }
+
+  _items() {
+    if (this._tab === 'playlists') return this._library ? selectPlaylists(this._library, this._config) : [];
+    return this._tracks[this._tab] || [];
+  }
+
+  _playPlaylist(uri) {
     const entityId = this._config.entity;
-    this._hass.callService('music_assistant', 'play_media', { media_id: uri, media_type: 'playlist', enqueue }, { entity_id: entityId })
+    this._hass.callService('music_assistant', 'play_media', { media_id: uri, media_type: 'playlist', enqueue: 'replace' }, { entity_id: entityId })
       .then(() => {
-        if (enqueue === 'replace' && this._config.shuffle) {
-          this._hass.callService('media_player', 'shuffle_set', { shuffle: true }, { entity_id: entityId });
-        }
+        if (this._config.shuffle) this._hass.callService('media_player', 'shuffle_set', { shuffle: true }, { entity_id: entityId });
       });
-    if (enqueue === 'replace') {
-      this._lastUri = uri;
-      try { localStorage.setItem(`ma-playlist-grid:${entityId}`, uri); } catch (e) { /* storage blocked */ }
-      const moodEntity = this._config.mood_entity;
-      if (moodEntity && this._config.mood_reset_option) {
-        this._hass.callService('input_select', 'select_option', { option: this._config.mood_reset_option }, { entity_id: moodEntity });
-      }
+    this._lastUri = uri;
+    try { localStorage.setItem(`ma-playlist-grid:${entityId}`, uri); } catch (e) { /* storage blocked */ }
+    const moodEntity = this._config.mood_entity;
+    if (moodEntity && this._config.mood_reset_option) {
+      this._hass.callService('input_select', 'select_option', { option: this._config.mood_reset_option }, { entity_id: moodEntity });
     }
     this._updateActive();
+  }
+
+  _pick(item, enqueue, radio = false) {
+    if (item.media_type === 'playlist' && enqueue === 'play' && !radio) {
+      this._playPlaylist(item.uri);
+      return;
+    }
+    playMedia(this._hass, this._config.entity, item, enqueue, radio);
+    showToast(this.shadowRoot, toastFor(resolveLanguage(this._hass), item, enqueue, radio));
   }
 
   _isPlaying() {
@@ -224,23 +421,33 @@ class MaPlaylistGrid extends ElementBase {
     const lang = resolveLanguage(this._hass);
     const accent = this._config.color || 'var(--primary-color)';
     const columns = Number(this._config.columns) || 0;
-    const items = this._library ? selectPlaylists(this._library, this._config) : [];
+    const secure = isSecure();
+    const tabs = this._visibleTabs();
+    if (!tabs.includes(this._tab)) this._tab = tabs[0];
+    const items = this._items();
+    const isPlaylists = this._tab === 'playlists';
     let body;
     if (this._error) body = `<div class="warning">${escapeHtml(t(lang, 'unavailable'))}</div>`;
     else if (!this._library) body = `<div class="muted pad">${escapeHtml(t(lang, 'loading'))}</div>`;
-    else if (!items.length) body = `<div class="muted pad">${escapeHtml(t(lang, 'no_playlists'))}</div>`;
+    else if (!items.length) body = `<div class="muted pad">${escapeHtml(t(lang, isPlaylists ? 'no_playlists' : 'empty'))}</div>`;
     else {
-      body = `<div class="grid">${items.map((item) => `
-        <div class="cover" data-uri="${escapeHtml(item.uri)}" title="${escapeHtml(item.name)}">
-          <div class="art tile">${item.image ? `<img src="${escapeHtml(item.image)}" alt="" loading="lazy">` : '<ha-icon icon="mdi:playlist-music"></ha-icon>'}</div>
+      const icon = isPlaylists ? 'mdi:playlist-music' : 'mdi:music-note';
+      body = `<div class="grid">${items.map((item, index) => {
+        const image = safeImage(item.image, secure);
+        return `
+        <div class="cover" data-index="${index}" data-uri="${escapeHtml(item.uri)}" title="${escapeHtml(item.name)}">
+          <div class="art tile">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy">` : `<ha-icon icon="${icon}"></ha-icon>`}</div>
           <div class="label">${escapeHtml(item.name)}</div>
-        </div>`).join('')}</div>`;
+          ${item.subtitle ? `<div class="sub muted">${escapeHtml(item.subtitle)}</div>` : ''}
+        </div>`;
+      }).join('')}</div>`;
     }
     const title = this._config.title ?? t(lang, 'playlists');
+    const header = tabs.length > 1
+      ? `<div class="tabs">${tabs.map((tab) => `<button class="chip ${tab === this._tab ? 'on' : ''}" data-tab="${tab}">${escapeHtml(t(lang, tab))}</button>`).join('')}</div>`
+      : (title ? `<div class="header">${escapeHtml(title)}</div>` : '');
     this.shadowRoot.innerHTML = `
       <style>${BASE_STYLES}
-        .header { font-size: 16px; font-weight: 500; padding: 4px 2px 12px; }
-        .pad { padding: 12px 4px; font-size: 14px; }
         .grid { display: grid; gap: 14px; grid-template-columns: ${columns ? `repeat(${columns}, minmax(0, 1fr))` : 'repeat(auto-fill, minmax(130px, 1fr))'}; }
         .cover { cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
         .art { position: relative; aspect-ratio: 1; overflow: hidden; display: flex; align-items: center; justify-content: center; --mdc-icon-size: 40px; color: var(--secondary-text-color); outline: 2px solid transparent; outline-offset: 2px; transition: outline-color 0.2s, transform 0.1s; }
@@ -249,24 +456,12 @@ class MaPlaylistGrid extends ElementBase {
         .cover.active .art { outline-color: var(--mac-accent); }
         .cover.active .label { color: var(--mac-accent); }
         .label { margin-top: 8px; font-size: 13px; font-weight: 500; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-        .overlay { position: fixed; inset: 0; z-index: 9; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
-        .menu { width: 100%; max-width: 320px; background: var(--card-background-color, #1c1f24); border-radius: 14px; padding: 8px; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
-        .menu h3 { margin: 8px 12px 6px; font-size: 15px; font-weight: 500; }
-        .menu button { border: none; background: none; text-align: left; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; }
-        .menu button:hover { background: rgba(127,127,127,0.16); }
-        .menu .cancel { color: var(--secondary-text-color); }
+        .sub { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       </style>
       <ha-card style="--mac-accent: ${escapeHtml(accent)}">
-        ${title ? `<div class="header">${escapeHtml(title)}</div>` : ''}
+        ${header}
         ${body}
-        ${this._menu ? `
-          <div class="overlay"><div class="menu" role="menu">
-            <h3>${escapeHtml(this._menu.name)}</h3>
-            <button data-enqueue="replace">${escapeHtml(t(lang, 'play_now'))}</button>
-            <button data-enqueue="next">${escapeHtml(t(lang, 'play_next'))}</button>
-            <button data-enqueue="add">${escapeHtml(t(lang, 'add_queue'))}</button>
-            <button class="cancel" data-close>${escapeHtml(t(lang, 'cancel'))}</button>
-          </div></div>` : ''}
+        ${this._menu ? menuHtml(lang, this._menu.name, MEDIA_MENU) : ''}
       </ha-card>`;
     this._bind(items);
     this._updateActive();
@@ -274,44 +469,28 @@ class MaPlaylistGrid extends ElementBase {
 
   _bind(items) {
     const root = this.shadowRoot;
-    root.querySelectorAll('.art img').forEach((img) => img.addEventListener('error', () => {
-      img.replaceWith(Object.assign(document.createElement('ha-icon'), { icon: 'mdi:playlist-music' }));
-    }, { once: true }));
+    fallbackImages(root, this._tab === 'playlists' ? 'mdi:playlist-music' : 'mdi:music-note');
+    root.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => {
+      this._tab = button.dataset.tab;
+      this._render();
+    }));
     root.querySelectorAll('.cover').forEach((el) => {
-      const uri = el.dataset.uri;
-      let timer = null;
-      let longPressed = false;
-      const cancel = () => clearTimeout(timer);
-      el.addEventListener('pointerdown', () => {
-        longPressed = false;
-        timer = setTimeout(() => {
-          longPressed = true;
-          this._menu = items.find((item) => item.uri === uri);
-          this._render();
-        }, LONG_PRESS_MS);
-      });
-      el.addEventListener('pointerup', cancel);
-      el.addEventListener('pointerleave', cancel);
-      el.addEventListener('pointercancel', cancel);
-      el.addEventListener('contextmenu', (event) => event.preventDefault());
-      el.addEventListener('click', () => {
-        if (!longPressed) this._play(uri);
+      const item = items[Number(el.dataset.index)];
+      // A playlist replaces the queue; a single song joins it, jukebox style.
+      bindPress(el, () => this._pick(item, item.media_type === 'playlist' ? 'play' : 'next'), () => {
+        this._menu = item;
+        this._render();
       });
     });
-    const overlay = root.querySelector('.overlay');
-    if (!overlay) return;
     const close = () => {
       this._menu = null;
       this._render();
     };
-    overlay.addEventListener('click', (event) => event.target === overlay && close());
-    overlay.querySelector('[data-close]').addEventListener('click', close);
-    overlay.querySelectorAll('[data-enqueue]').forEach((button) => button.addEventListener('click', () => {
-      const uri = this._menu.uri;
-      this._menu = null;
-      this._play(uri, button.dataset.enqueue);
-      this._render();
-    }));
+    bindMenu(root, MEDIA_MENU, ([, enqueue, radio]) => {
+      const item = this._menu;
+      close();
+      this._pick(item, enqueue, radio);
+    }, close);
   }
 }
 
@@ -414,6 +593,7 @@ class MaNowPlaying extends ElementBase {
     const volume = Math.round((Number(a.volume_level) || 0) * 100);
     const repeatIcon = a.repeat === 'one' ? 'mdi:repeat-once' : (a.repeat === 'all' ? 'mdi:repeat' : 'mdi:repeat-off');
     const duration = Number(a.media_duration) || 0;
+    const radio = !compact && this._config.radio && !idle && a.media_content_id;
 
     let body;
     if (!stateObj) {
@@ -432,6 +612,7 @@ class MaNowPlaying extends ElementBase {
               <button class="ctl main" data-action="play_pause" ${off ? 'disabled' : ''}><ha-icon icon="${playing ? 'mdi:pause' : 'mdi:play'}"></ha-icon></button>
               <button class="ctl" data-action="next" ${off ? 'disabled' : ''}><ha-icon icon="mdi:skip-next"></ha-icon></button>
               ${compact ? '' : `<button class="ctl small ${a.repeat && a.repeat !== 'off' ? 'on' : ''}" data-action="repeat" ${off ? 'disabled' : ''}><ha-icon icon="${repeatIcon}"></ha-icon></button>`}
+              ${radio ? `<button class="ctl small" data-action="radio" title="${escapeHtml(t(lang, 'more_like_this'))}"><ha-icon icon="mdi:radio-tower"></ha-icon></button>` : ''}
             </div>
             <div class="volume">
               <button class="ctl small" data-action="mute" ${off ? 'disabled' : ''}><ha-icon icon="${a.is_volume_muted ? 'mdi:volume-off' : 'mdi:volume-high'}"></ha-icon></button>
@@ -487,6 +668,12 @@ class MaNowPlaying extends ElementBase {
       else if (action === 'shuffle') this._call('shuffle_set', { shuffle: !a.shuffle });
       else if (action === 'repeat') this._call('repeat_set', { repeat: a.repeat === 'off' || !a.repeat ? 'all' : (a.repeat === 'all' ? 'one' : 'off') });
       else if (action === 'mute') this._call('volume_mute', { is_volume_muted: !a.is_volume_muted });
+      else if (action === 'radio') {
+        // Keeps the current song and swaps what comes after it for similar ones.
+        const item = { uri: a.media_content_id, media_type: 'track', name: a.media_title };
+        playMedia(this._hass, this._config.entity, item, 'replace_next', true);
+        showToast(root, toastFor(resolveLanguage(this._hass), item, 'replace', true));
+      }
     }));
     const slider = root.querySelector('.volume input');
     const label = root.querySelector('.vol-label');
@@ -502,8 +689,11 @@ class MaNowPlaying extends ElementBase {
 }
 
 /* ---------------------------------------------------------------- */
-/* Queue                                                             */
+/* Queue and search                                                  */
 /* ---------------------------------------------------------------- */
+
+// Queue menu entries: label key, mass_queue service.
+const QUEUE_MENU = [['play_now', 'play_queue_item'], ['play_next', 'move_queue_item_next'], ['move_up', 'move_queue_item_up'], ['move_down', 'move_queue_item_down'], ['remove', 'remove_queue_item']];
 
 class MaQueue extends ElementBase {
   constructor() {
@@ -516,6 +706,13 @@ class MaQueue extends ElementBase {
     this._trackSignature = null;
     this._loading = false;
     this._timer = null;
+    this._query = '';
+    this._results = null;
+    this._searching = false;
+    this._searchTab = null;
+    this._searchSeq = 0;
+    this._debounce = null;
+    this._shell = false;
   }
 
   static getStubConfig(hass) {
@@ -524,13 +721,16 @@ class MaQueue extends ElementBase {
 
   setConfig(config) {
     if (!config?.entity) throw new Error('entity is required');
-    this._config = { limit: 25, ...config };
+    this._config = { limit: 25, search: false, ...config };
     this._trackSignature = null;
+    this._shell = false;
     this._render();
   }
 
   set hass(hass) {
+    const first = !this._hass;
     this._hass = hass;
+    if (first) this._render();
     const a = hass?.states?.[this._config?.entity]?.attributes || {};
     const signature = JSON.stringify([a.media_content_id, a.media_title, a.shuffle, a.active_queue]);
     if (signature !== this._trackSignature) {
@@ -555,6 +755,10 @@ class MaQueue extends ElementBase {
     return { columns: 12, rows: 'auto', min_columns: 4 };
   }
 
+  get _searchActive() {
+    return this._query.trim().length >= 2;
+  }
+
   async _service(domain, service, data, response = false, target = undefined) {
     const message = { type: 'call_service', domain, service, service_data: data };
     if (target) message.target = target;
@@ -567,7 +771,7 @@ class MaQueue extends ElementBase {
     const entity = this._config.entity;
     if (!this._hass.services?.mass_queue) {
       this._error = 'queue_missing';
-      this._render();
+      this._renderBody();
       return;
     }
     this._loading = true;
@@ -575,129 +779,215 @@ class MaQueue extends ElementBase {
       const queue = (await this._service('music_assistant', 'get_queue', {}, true, { entity_id: entity }).catch(() => null))?.response?.[entity];
       const current = queue?.current_item?.queue_item_id || null;
       const limit = Number(this._config.limit) || 25;
-      const result = await this._service('mass_queue', 'get_queue_items', { entity, offset: Math.max(0, Number(queue?.current_index) || 0), limit: limit + 1 }, true);
-      const items = result?.response?.[entity] || [];
-      this._items = upcomingItems(items, current, limit + 1);
-      this._total = Math.max(0, (Number(queue?.items) || 0) - (Number(queue?.current_index) || 0));
+      const index = Math.max(0, Number(queue?.current_index) || 0);
+      const result = await this._service('mass_queue', 'get_queue_items', { entity, offset: index, limit: limit + 1 }, true);
+      this._items = upcomingItems(result?.response?.[entity] || [], current, limit + 1);
+      this._total = Math.max(0, (Number(queue?.items) || 0) - index);
       this._error = null;
     } catch (e) {
       this._error = 'unavailable';
     }
     this._loading = false;
-    this._render();
+    if (!this._searchActive) this._renderBody();
   }
 
-  async _act(service, item) {
+  async _search() {
+    if (!this._searchActive) {
+      this._results = null;
+      this._renderBody();
+      return;
+    }
+    const seq = ++this._searchSeq;
+    this._searching = true;
+    this._renderBody();
+    let results = {};
+    try {
+      const entryId = await configEntryId(this._hass, this._config);
+      const result = await this._service('music_assistant', 'search', { config_entry_id: entryId, name: this._query.trim(), limit: 8 }, true);
+      results = searchGroups(result?.response);
+    } catch (e) {
+      results = {};
+    }
+    if (seq !== this._searchSeq) return;
+    this._results = results;
+    this._searching = false;
+    if (!results[this._searchTab]) this._searchTab = Object.keys(results)[0] || null;
+    this._renderBody();
+  }
+
+  _clearSearch() {
+    this._query = '';
+    this._results = null;
+    this._searchSeq++;
+    const input = this.shadowRoot.querySelector('input');
+    if (input) input.value = '';
+    this._renderBody();
+    this._load();
+  }
+
+  async _queueAction(service, item) {
     await this._service('mass_queue', service, { entity: this._config.entity, queue_item_id: item.queue_item_id }).catch(() => null);
     this._load();
   }
 
-  _render() {
-    if (!this._config) return;
-    const lang = resolveLanguage(this._hass);
-    const accent = this._config.color || 'var(--primary-color)';
-    const secure = typeof location !== 'undefined' && location.protocol === 'https:';
-    const items = this._items || [];
-    let body;
-    if (this._error) body = `<div class="warning">${escapeHtml(t(lang, this._error))}</div>`;
-    else if (!this._items) body = `<div class="muted pad">${escapeHtml(t(lang, 'loading'))}</div>`;
-    else if (!items.length) body = `<div class="muted pad">${escapeHtml(t(lang, 'queue_empty'))}</div>`;
-    else {
-      const rest = this._total - items.length;
-      body = `<div class="list tile">${items.map((item, index) => {
-        const image = queueImage(item, secure);
-        return `
-          <div class="row ${item.current ? 'current' : ''}" data-index="${index}">
-            <div class="thumb">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy">` : '<ha-icon icon="mdi:music-note"></ha-icon>'}</div>
-            <div class="text">
-              <div class="name">${escapeHtml(item.media_title)}</div>
-              <div class="artist muted">${escapeHtml(item.media_artist)}</div>
-            </div>
-            ${item.current ? `<span class="badge">${escapeHtml(t(lang, 'now'))}</span>` : ''}
-          </div>`;
-      }).join('')}
-      ${rest > 0 ? `<div class="more muted">${escapeHtml(t(lang, 'more_in_queue').replace('{n}', rest))}</div>` : ''}
-      </div>`;
-    }
-    const title = this._config.title ?? t(lang, 'queue');
-    const maxHeight = this._config.max_height;
-    this.shadowRoot.innerHTML = `
-      <style>${BASE_STYLES}
-        .header { font-size: 16px; font-weight: 500; padding: 4px 2px 12px; }
-        .pad { padding: 12px 4px; font-size: 14px; }
-        .list { padding: 6px; ${maxHeight ? `max-height: ${escapeHtml(maxHeight)}; overflow-y: auto;` : ''} }
-        .row { display: flex; align-items: center; gap: 12px; padding: 6px; border-radius: 8px; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-        .row:hover { background: rgba(127,127,127,0.12); }
-        .row.current .name { color: var(--mac-accent); }
-        .thumb { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: rgba(127,127,127,0.18); color: var(--secondary-text-color); --mdc-icon-size: 22px; }
-        .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-        .text { flex: 1; min-width: 0; }
-        .name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .artist { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: var(--mac-accent); color: var(--text-primary-color, #fff); }
-        .more { font-size: 12px; text-align: center; padding: 8px 0 4px; }
-        .overlay { position: fixed; inset: 0; z-index: 9; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
-        .menu { width: 100%; max-width: 320px; background: var(--card-background-color, #1c1f24); border-radius: 14px; padding: 8px; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
-        .menu h3 { margin: 8px 12px 6px; font-size: 15px; font-weight: 500; }
-        .menu button { border: none; background: none; text-align: left; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; }
-        .menu button:hover { background: rgba(127,127,127,0.16); }
-        .menu .cancel { color: var(--secondary-text-color); }
-      </style>
-      <ha-card style="--mac-accent: ${escapeHtml(accent)}">
-        ${title ? `<div class="header">${escapeHtml(title)}</div>` : ''}
-        ${body}
-        ${this._menu ? `
-          <div class="overlay"><div class="menu" role="menu">
-            <h3>${escapeHtml(this._menu.media_title)}</h3>
-            <button data-service="play_queue_item">${escapeHtml(t(lang, 'play_now'))}</button>
-            <button data-service="move_queue_item_next">${escapeHtml(t(lang, 'play_next'))}</button>
-            <button data-service="remove_queue_item">${escapeHtml(t(lang, 'remove'))}</button>
-            <button class="cancel" data-close>${escapeHtml(t(lang, 'cancel'))}</button>
-          </div></div>` : ''}
-      </ha-card>`;
-    this._bind(items);
+  _enqueue(item, enqueue, radio = false) {
+    playMedia(this._hass, this._config.entity, item, enqueue, radio);
+    showToast(this.shadowRoot, toastFor(resolveLanguage(this._hass), item, enqueue, radio));
+    setTimeout(() => this._load(), 1500);
   }
 
-  _bind(items) {
-    const root = this.shadowRoot;
-    root.querySelectorAll('.thumb img').forEach((img) => img.addEventListener('error', () => {
-      img.replaceWith(Object.assign(document.createElement('ha-icon'), { icon: 'mdi:music-note' }));
-    }, { once: true }));
-    root.querySelectorAll('.row').forEach((el) => {
-      const item = items[Number(el.dataset.index)];
-      let timer = null;
-      let longPressed = false;
-      const cancel = () => clearTimeout(timer);
-      el.addEventListener('pointerdown', () => {
-        longPressed = false;
-        timer = setTimeout(() => {
-          longPressed = true;
-          this._menu = item;
-          this._render();
-        }, LONG_PRESS_MS);
-      });
-      el.addEventListener('pointerup', cancel);
-      el.addEventListener('pointerleave', cancel);
-      el.addEventListener('pointercancel', cancel);
-      el.addEventListener('contextmenu', (event) => event.preventDefault());
-      el.addEventListener('click', () => {
-        if (!longPressed && !item.current) this._act('play_queue_item', item);
-      });
+  // The search box lives outside the body so typing never loses focus on re-render.
+  _render() {
+    if (!this._config) return;
+    if (!this._shell) {
+      const accent = this._config.color || 'var(--primary-color)';
+      this.shadowRoot.innerHTML = `
+        <style>${BASE_STYLES}${ROW_STYLES}
+          .search { display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; height: 44px; margin-bottom: 12px; color: var(--secondary-text-color); --mdc-icon-size: 20px; }
+          .search input { flex: 1; min-width: 0; border: none; outline: none; background: none; font: inherit; font-size: 14px; color: var(--primary-text-color); }
+          .search input::-webkit-search-cancel-button { display: none; }
+          .search .clear { border: none; background: none; cursor: pointer; width: 32px; height: 32px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: var(--secondary-text-color); }
+          .search .clear[hidden] { display: none; }
+          .scroll { overflow-y: auto; }
+          .more { font-size: 12px; text-align: center; padding: 8px 0 4px; }
+        </style>
+        <ha-card style="--mac-accent: ${escapeHtml(accent)}">
+          ${this._config.search ? `
+            <label class="search tile">
+              <ha-icon icon="mdi:magnify"></ha-icon>
+              <input type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" spellcheck="false">
+              <button class="clear" hidden><ha-icon icon="mdi:close"></ha-icon></button>
+            </label>` : ''}
+          <div class="header" hidden></div>
+          <div class="body"></div>
+          <div class="menu-host"></div>
+        </ha-card>`;
+      this._shell = true;
+      this._bindSearch();
+    }
+    this._renderBody();
+  }
+
+  _bindSearch() {
+    const input = this.shadowRoot.querySelector('input');
+    const clear = this.shadowRoot.querySelector('.clear');
+    if (!input) return;
+    input.value = this._query;
+    ['keyup', 'keypress'].forEach((type) => input.addEventListener(type, (event) => event.stopPropagation()));
+    input.addEventListener('input', () => {
+      this._query = input.value;
+      clear.hidden = !input.value;
+      clearTimeout(this._debounce);
+      this._debounce = setTimeout(() => this._search(), SEARCH_DEBOUNCE_MS);
+      if (!this._searchActive) this._search();
     });
-    const overlay = root.querySelector('.overlay');
-    if (!overlay) return;
-    const close = () => {
-      this._menu = null;
-      this._render();
-    };
-    overlay.addEventListener('click', (event) => event.target === overlay && close());
-    overlay.querySelector('[data-close]').addEventListener('click', close);
-    overlay.querySelectorAll('[data-service]').forEach((button) => button.addEventListener('click', () => {
-      const item = this._menu;
-      this._menu = null;
-      this._render();
-      this._act(button.dataset.service, item);
+    input.addEventListener('keydown', (event) => {
+      // Home Assistant binds single-letter shortcuts (a, c, e, m) on the document.
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        clear.hidden = true;
+        this._clearSearch();
+      } else if (event.key === 'Enter') {
+        clearTimeout(this._debounce);
+        this._search();
+        input.blur();
+      }
+    });
+    clear.addEventListener('click', (event) => {
+      event.preventDefault();
+      clear.hidden = true;
+      this._clearSearch();
+    });
+  }
+
+  _rowHtml(item, index, image, extra = '') {
+    const round = item.media_type === 'artist';
+    return `
+      <div class="row ${item.current ? 'current' : ''}" data-index="${index}">
+        <div class="thumb ${round ? 'round' : ''}">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy">` : '<ha-icon icon="mdi:music-note"></ha-icon>'}</div>
+        <div class="text">
+          <div class="name">${escapeHtml(item.name ?? item.media_title)}</div>
+          <div class="artist muted">${escapeHtml(item.subtitle ?? item.media_artist)}</div>
+        </div>
+        ${extra}
+      </div>`;
+  }
+
+  _renderBody() {
+    const root = this.shadowRoot;
+    const body = root?.querySelector('.body');
+    if (!body) return;
+    const lang = resolveLanguage(this._hass);
+    const secure = isSecure();
+    const header = root.querySelector('.header');
+    const title = this._config.title ?? t(lang, 'queue');
+    header.textContent = title;
+    header.hidden = !title || this._searchActive;
+    const input = root.querySelector('input');
+    if (input) input.placeholder = t(lang, 'search');
+    const scroll = this._config.max_height ? `style="max-height: ${escapeHtml(this._config.max_height)}"` : '';
+
+    let html;
+    let rows = [];
+    if (this._searchActive) {
+      const groups = this._results || {};
+      const types = Object.keys(groups);
+      if (!this._results) html = `<div class="muted pad">${escapeHtml(t(lang, 'loading'))}</div>`;
+      else if (!types.length) html = `<div class="muted pad">${escapeHtml(t(lang, this._searching ? 'loading' : 'no_results'))}</div>`;
+      else {
+        rows = groups[this._searchTab] || [];
+        html = `
+          <div class="tabs">${types.map((type) => `<button class="chip ${type === this._searchTab ? 'on' : ''}" data-tab="${type}">${escapeHtml(t(lang, type))}</button>`).join('')}</div>
+          <div class="list tile scroll" ${scroll}>${rows.map((item, index) => this._rowHtml(item, index, safeImage(item.image, secure))).join('')}</div>`;
+      }
+    } else if (this._error) {
+      html = `<div class="warning">${escapeHtml(t(lang, this._error))}</div>`;
+    } else if (!this._items) {
+      html = `<div class="muted pad">${escapeHtml(t(lang, 'loading'))}</div>`;
+    } else if (!this._items.length) {
+      html = `<div class="muted pad">${escapeHtml(t(lang, 'queue_empty'))}</div>`;
+    } else {
+      rows = this._items;
+      const rest = this._total - rows.length;
+      html = `<div class="list tile scroll" ${scroll}>
+        ${rows.map((item, index) => this._rowHtml(item, index, queueImage(item, secure), item.current ? `<span class="badge">${escapeHtml(t(lang, 'now'))}</span>` : '')).join('')}
+        ${rest > 0 ? `<div class="more muted">${escapeHtml(t(lang, 'more_in_queue').replace('{n}', rest))}</div>` : ''}
+      </div>`;
+    }
+    body.innerHTML = html;
+    fallbackImages(body, 'mdi:music-note');
+    body.querySelectorAll('[data-tab]').forEach((button) => button.addEventListener('click', () => {
+      this._searchTab = button.dataset.tab;
+      this._renderBody();
     }));
+    const searching = this._searchActive;
+    body.querySelectorAll('.row').forEach((el) => {
+      const item = rows[Number(el.dataset.index)];
+      if (searching) {
+        bindPress(el, () => this._enqueue(item, 'next'), () => this._openMenu({ kind: 'media', item }));
+      } else {
+        bindPress(el, () => !item.current && this._queueAction('play_queue_item', item), () => this._openMenu({ kind: 'queue', item }));
+      }
+    });
+  }
+
+  _openMenu(menu) {
+    const host = this.shadowRoot.querySelector('.menu-host');
+    const lang = resolveLanguage(this._hass);
+    const close = () => { host.innerHTML = ''; };
+    if (menu.kind === 'media') {
+      host.innerHTML = menuHtml(lang, menu.item.name, MEDIA_MENU);
+      bindMenu(host, MEDIA_MENU, ([, enqueue, radio]) => {
+        close();
+        this._enqueue(menu.item, enqueue, radio);
+      }, close);
+    } else {
+      host.innerHTML = menuHtml(lang, menu.item.media_title, QUEUE_MENU);
+      bindMenu(host, QUEUE_MENU, ([, service]) => {
+        close();
+        this._queueAction(service, menu.item);
+      }, close);
+    }
   }
 }
 
@@ -755,7 +1045,6 @@ class MoodButtons extends ElementBase {
     const title = this._config.title;
     this.shadowRoot.innerHTML = `
       <style>${BASE_STYLES}
-        .header { font-size: 16px; font-weight: 500; padding: 4px 2px 12px; }
         .grid { display: grid; gap: 10px; grid-template-columns: repeat(${columns}, minmax(0, 1fr)); }
         @container (max-width: 360px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         ha-card { container-type: inline-size; }
@@ -777,9 +1066,9 @@ class MoodButtons extends ElementBase {
 
 if (typeof customElements !== 'undefined') {
   const cards = [
-    ['ma-playlist-grid', MaPlaylistGrid, 'MA Playlist Grid', 'Music Assistant playlists as a grid of covers; tap to play.'],
+    ['ma-playlist-grid', MaPlaylistGrid, 'MA Playlist Grid', 'Music Assistant playlists, recent and favourite songs as a grid of covers.'],
     ['ma-now-playing', MaNowPlaying, 'MA Now Playing', 'What is playing, with controls and volume.'],
-    ['ma-queue', MaQueue, 'MA Queue', 'The play queue from the current track on; tap to jump, hold for more.'],
+    ['ma-queue', MaQueue, 'MA Queue', 'The play queue from the current track on, with optional search that adds songs to it.'],
     ['mood-buttons', MoodButtons, 'Mood Buttons', 'Big buttons that run a script and show the active mood.']
   ];
   window.customCards = window.customCards || [];
