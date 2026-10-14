@@ -1,0 +1,6 @@
+{
+  "name": "Music Assistant Cards",
+  "filename": "music-assistant-cards.js",
+  "render_readme": true,
+  "homeassistant": "2024.11.0"
+}
