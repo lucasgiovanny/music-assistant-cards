@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 - 2026-10-14
+
+- `ma-party`: switches the Music Assistant Party plugin's guest access and shows the join QR
+  code, through `mass_queue`. Bundles qrcode-generator 1.4.4 (MIT)
+
 ## 0.3.0 - 2026-10-14
 
 - `ma-queue` `search: true`: a search box over every Music Assistant provider. A tapped result

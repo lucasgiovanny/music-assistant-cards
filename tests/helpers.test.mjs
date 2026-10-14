@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { selectPlaylists, formatDuration, isActiveMood, resolveLanguage, t, upcomingItems, queueImage, safeImage, searchGroups, mediaRow, toastFor } from '../dist/music-assistant-cards.js';
+import { selectPlaylists, formatDuration, isActiveMood, resolveLanguage, t, upcomingItems, queueImage, safeImage, searchGroups, mediaRow, toastFor, partyQrSvg } from '../dist/music-assistant-cards.js';
 
 const library = [
   { name: 'Infinite Mix (library)', uri: 'library://playlist/7', image: 'a.jpg' },
@@ -85,4 +85,10 @@ test('the toast says where the song went', () => {
   assert.equal(toastFor('pt', { name: 'Alvorada' }, 'add'), 'No fim da fila: Alvorada');
   assert.equal(toastFor('pt', { name: 'Alvorada' }, 'replace', true), 'Rádio a partir de Alvorada');
   assert.equal(toastFor('en', { name: 'Alvorada' }, 'play'), 'Playing Alvorada');
+});
+
+test('the party link becomes a square SVG QR code', () => {
+  const svg = partyQrSvg('https://app.music-assistant.io/?remote_id=ABCDEFGH1234&join=XYZ123abc');
+  assert.match(svg, /^<svg[^>]+viewBox="0 0 (\d+) \1"/);
+  assert.match(svg, /<path /);
 });

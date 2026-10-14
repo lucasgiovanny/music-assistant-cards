@@ -1,6 +1,6 @@
 # Music Assistant Cards
 
-Four Lovelace cards for [Music Assistant](https://www.music-assistant.io/) in Home Assistant,
+Five Lovelace cards for [Music Assistant](https://www.music-assistant.io/) in Home Assistant,
 drawn to sit beside the [Daylight Calendar Card](https://github.com/lucasgiovanny/daylight-calendar-card)
 and the [Shopping List Card](https://github.com/lucasgiovanny/shopping-list-card): no card chrome,
 dark tiles, one accent colour.
@@ -10,7 +10,7 @@ dark tiles, one accent colour.
 ## Installation
 
 HACS → ⋮ → *Custom repositories* → `https://github.com/lucasgiovanny/music-assistant-cards`, type
-*Dashboard*. Install *Music Assistant Cards* and reload the browser. One file registers all four cards.
+*Dashboard*. Install *Music Assistant Cards* and reload the browser. One file registers all five cards.
 
 ## `ma-playlist-grid`
 
@@ -85,6 +85,27 @@ and playlists. Tapping a result puts it next in the queue, jukebox style; holdin
 *Play now*, *Play next*, *Add to queue* and *Radio*. Covers use the copy
 `mass_queue` encodes when its *download local* option is on, so they show over HTTPS too.
 
+## `ma-party`
+
+A switch for the Music Assistant [Party](https://music-assistant.io/plugins/party) plugin's
+guest access and, while it is on, the join QR code. Guests scan it and add songs from their
+phones. Talks to Music Assistant through the `mass_queue` integration's `send_command`.
+
+```yaml
+type: custom:ma-party
+config_entry_id: 01ABC...   # the mass_queue entry; read automatically for admins
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `config_entry_id` | first `mass_queue` entry | Needed for users who are not admins |
+| `instance_id` | `party` | Party plugin instance |
+| `title` | *Party* | Name on the card |
+| `color` | `var(--primary-color)` | Accent while the party is on |
+
+The link works away from home when Music Assistant's remote access (or an external URL) is
+set; otherwise only on the home network. Turning the switch off ends every guest session.
+
 ## `mood-buttons`
 
 ```yaml
@@ -108,6 +129,11 @@ One file, `dist/music-assistant-cards.js`, no build step.
 node --check dist/music-assistant-cards.js
 npm test
 ```
+
+## Credits
+
+The QR code is drawn by [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)
+by Kazuhiko Arase (MIT), bundled at the end of the file.
 
 ## License
 
