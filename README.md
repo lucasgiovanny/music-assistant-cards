@@ -1,6 +1,6 @@
 # Music Assistant Cards
 
-Three Lovelace cards for [Music Assistant](https://www.music-assistant.io/) in Home Assistant,
+Four Lovelace cards for [Music Assistant](https://www.music-assistant.io/) in Home Assistant,
 drawn to sit beside the [Daylight Calendar Card](https://github.com/lucasgiovanny/daylight-calendar-card)
 and the [Shopping List Card](https://github.com/lucasgiovanny/shopping-list-card): no card chrome,
 dark tiles, one accent colour.
@@ -10,7 +10,7 @@ dark tiles, one accent colour.
 ## Installation
 
 HACS → ⋮ → *Custom repositories* → `https://github.com/lucasgiovanny/music-assistant-cards`, type
-*Dashboard*. Install *Music Assistant Cards* and reload the browser. One file registers all three cards.
+*Dashboard*. Install *Music Assistant Cards* and reload the browser. One file registers all four cards.
 
 ## `ma-playlist-grid`
 
@@ -51,6 +51,30 @@ compact: false
 
 Options: `entity` (required), `compact`, `color`, `name` (shown when nothing plays). Tap the
 cover for the more-info dialog.
+
+## `ma-queue`
+
+Needs the [Music Assistant Queue Actions](https://github.com/droans/mass_queue) integration
+(`mass_queue`), which exposes the full queue to Home Assistant.
+
+```yaml
+type: custom:ma-queue
+entity: media_player.living_room_2
+limit: 25
+max_height: 640px
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `entity` | — | **Required.** A Music Assistant `media_player` |
+| `limit` | `25` | Items shown after the current one |
+| `max_height` | none | Scroll inside the card past this height |
+| `title` | *Up next* | Header. `""` hides it |
+| `color` | `var(--primary-color)` | Accent of the current item |
+
+The list starts at the current track and refreshes when the track changes. Tap an item to
+jump to it; hold it for *Play now*, *Play next* or *Remove from queue*. Covers use the copy
+`mass_queue` encodes when its *download local* option is on, so they show over HTTPS too.
 
 ## `mood-buttons`
 

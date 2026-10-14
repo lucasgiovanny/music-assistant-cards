@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 - 2026-10-14
+
+- `ma-queue`: the play queue from the current track on, through the `mass_queue`
+  integration. Tap jumps to an item; hold offers *Play now*, *Play next* and *Remove from queue*
+
 ## 0.1.1 - 2026-10-14
 
 - `ma-now-playing` shows the cover through Home Assistant's media proxy, so it appears on an

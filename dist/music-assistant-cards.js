@@ -1,10 +1,10 @@
 /* Music Assistant Cards
- * Three Lovelace cards drawn to sit beside the Daylight Calendar Card and the Shopping List
- * Card: a playlist cover grid, a now-playing panel and mood buttons.
+ * Lovelace cards drawn to sit beside the Daylight Calendar Card and the Shopping List
+ * Card: a playlist cover grid, a now-playing panel, the play queue and mood buttons.
  * Licensed under MIT. See LICENSE.
  */
 
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 const LONG_PRESS_MS = 500;
 // Lets the helpers be imported by the Node tests, where there is no DOM.
 const ElementBase = typeof HTMLElement === 'undefined' ? class {} : HTMLElement;
@@ -21,7 +21,13 @@ const STRINGS = {
     cancel: 'Cancel',
     nothing_playing: 'Nothing playing',
     missing_entity: 'Set a media_player entity',
-    missing_moods: 'Add moods to the card'
+    missing_moods: 'Add moods to the card',
+    queue: 'Up next',
+    queue_empty: 'The queue is empty',
+    queue_missing: 'Install the Music Assistant Queue Actions integration (mass_queue)',
+    now: 'Now',
+    remove: 'Remove from queue',
+    more_in_queue: '+{n} more in the queue'
   },
   pt: {
     playlists: 'Playlists',
@@ -34,7 +40,13 @@ const STRINGS = {
     cancel: 'Cancelar',
     nothing_playing: 'Nada tocando',
     missing_entity: 'Defina uma entidade media_player',
-    missing_moods: 'Adicione moods ao card'
+    missing_moods: 'Adicione moods ao card',
+    queue: 'A seguir',
+    queue_empty: 'A fila está vazia',
+    queue_missing: 'Instale a integração Music Assistant Queue Actions (mass_queue)',
+    now: 'Agora',
+    remove: 'Remover da fila',
+    more_in_queue: '+{n} na fila'
   }
 };
 
@@ -77,6 +89,22 @@ export function formatDuration(seconds) {
 export function isActiveMood(mood, stateValue) {
   if (!mood || stateValue == null) return false;
   return normalizeName(mood.mood ?? mood.name) === normalizeName(stateValue);
+}
+
+// Queue items from the current one onwards; the current item is flagged and kept first.
+export function upcomingItems(items, currentId, limit) {
+  const list = Array.isArray(items) ? items.filter((item) => item && item.queue_item_id) : [];
+  const start = Math.max(0, list.findIndex((item) => item.queue_item_id === currentId));
+  return list.slice(start, start + Math.max(1, Number(limit) || 1)).map((item) => ({ ...item, current: item.queue_item_id === currentId }));
+}
+
+// Prefers the image mass_queue already encoded; a plain-HTTP URL would be blocked on an HTTPS page.
+export function queueImage(item, secure) {
+  const encoded = item?.local_image_encoded;
+  if (encoded) return String(encoded).startsWith('data:') ? encoded : `data:image;base64,${encoded}`;
+  const url = item?.media_image || '';
+  if (!url || (secure && url.startsWith('http://'))) return null;
+  return url;
 }
 
 function escapeHtml(value) {
@@ -474,6 +502,206 @@ class MaNowPlaying extends ElementBase {
 }
 
 /* ---------------------------------------------------------------- */
+/* Queue                                                             */
+/* ---------------------------------------------------------------- */
+
+class MaQueue extends ElementBase {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._items = null;
+    this._total = 0;
+    this._error = null;
+    this._menu = null;
+    this._trackSignature = null;
+    this._loading = false;
+    this._timer = null;
+  }
+
+  static getStubConfig(hass) {
+    return MaPlaylistGrid.getStubConfig(hass);
+  }
+
+  setConfig(config) {
+    if (!config?.entity) throw new Error('entity is required');
+    this._config = { limit: 25, ...config };
+    this._trackSignature = null;
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    const a = hass?.states?.[this._config?.entity]?.attributes || {};
+    const signature = JSON.stringify([a.media_content_id, a.media_title, a.shuffle, a.active_queue]);
+    if (signature !== this._trackSignature) {
+      this._trackSignature = signature;
+      this._load();
+    }
+  }
+
+  connectedCallback() {
+    this._timer = setInterval(() => this._load(), 60000);
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._timer);
+  }
+
+  getCardSize() {
+    return 6;
+  }
+
+  getGridOptions() {
+    return { columns: 12, rows: 'auto', min_columns: 4 };
+  }
+
+  async _service(domain, service, data, response = false, target = undefined) {
+    const message = { type: 'call_service', domain, service, service_data: data };
+    if (target) message.target = target;
+    if (response) message.return_response = true;
+    return this._hass.callWS(message);
+  }
+
+  async _load() {
+    if (!this._hass || !this._config || this._loading) return;
+    const entity = this._config.entity;
+    if (!this._hass.services?.mass_queue) {
+      this._error = 'queue_missing';
+      this._render();
+      return;
+    }
+    this._loading = true;
+    try {
+      const queue = (await this._service('music_assistant', 'get_queue', {}, true, { entity_id: entity }).catch(() => null))?.response?.[entity];
+      const current = queue?.current_item?.queue_item_id || null;
+      const limit = Number(this._config.limit) || 25;
+      const result = await this._service('mass_queue', 'get_queue_items', { entity, offset: Math.max(0, Number(queue?.current_index) || 0), limit: limit + 1 }, true);
+      const items = result?.response?.[entity] || [];
+      this._items = upcomingItems(items, current, limit + 1);
+      this._total = Math.max(0, (Number(queue?.items) || 0) - (Number(queue?.current_index) || 0));
+      this._error = null;
+    } catch (e) {
+      this._error = 'unavailable';
+    }
+    this._loading = false;
+    this._render();
+  }
+
+  async _act(service, item) {
+    await this._service('mass_queue', service, { entity: this._config.entity, queue_item_id: item.queue_item_id }).catch(() => null);
+    this._load();
+  }
+
+  _render() {
+    if (!this._config) return;
+    const lang = resolveLanguage(this._hass);
+    const accent = this._config.color || 'var(--primary-color)';
+    const secure = typeof location !== 'undefined' && location.protocol === 'https:';
+    const items = this._items || [];
+    let body;
+    if (this._error) body = `<div class="warning">${escapeHtml(t(lang, this._error))}</div>`;
+    else if (!this._items) body = `<div class="muted pad">${escapeHtml(t(lang, 'loading'))}</div>`;
+    else if (!items.length) body = `<div class="muted pad">${escapeHtml(t(lang, 'queue_empty'))}</div>`;
+    else {
+      const rest = this._total - items.length;
+      body = `<div class="list tile">${items.map((item, index) => {
+        const image = queueImage(item, secure);
+        return `
+          <div class="row ${item.current ? 'current' : ''}" data-index="${index}">
+            <div class="thumb">${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy">` : '<ha-icon icon="mdi:music-note"></ha-icon>'}</div>
+            <div class="text">
+              <div class="name">${escapeHtml(item.media_title)}</div>
+              <div class="artist muted">${escapeHtml(item.media_artist)}</div>
+            </div>
+            ${item.current ? `<span class="badge">${escapeHtml(t(lang, 'now'))}</span>` : ''}
+          </div>`;
+      }).join('')}
+      ${rest > 0 ? `<div class="more muted">${escapeHtml(t(lang, 'more_in_queue').replace('{n}', rest))}</div>` : ''}
+      </div>`;
+    }
+    const title = this._config.title ?? t(lang, 'queue');
+    const maxHeight = this._config.max_height;
+    this.shadowRoot.innerHTML = `
+      <style>${BASE_STYLES}
+        .header { font-size: 16px; font-weight: 500; padding: 4px 2px 12px; }
+        .pad { padding: 12px 4px; font-size: 14px; }
+        .list { padding: 6px; ${maxHeight ? `max-height: ${escapeHtml(maxHeight)}; overflow-y: auto;` : ''} }
+        .row { display: flex; align-items: center; gap: 12px; padding: 6px; border-radius: 8px; cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+        .row:hover { background: rgba(127,127,127,0.12); }
+        .row.current .name { color: var(--mac-accent); }
+        .thumb { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: rgba(127,127,127,0.18); color: var(--secondary-text-color); --mdc-icon-size: 22px; }
+        .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .text { flex: 1; min-width: 0; }
+        .name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .artist { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: var(--mac-accent); color: var(--text-primary-color, #fff); }
+        .more { font-size: 12px; text-align: center; padding: 8px 0 4px; }
+        .overlay { position: fixed; inset: 0; z-index: 9; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+        .menu { width: 100%; max-width: 320px; background: var(--card-background-color, #1c1f24); border-radius: 14px; padding: 8px; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        .menu h3 { margin: 8px 12px 6px; font-size: 15px; font-weight: 500; }
+        .menu button { border: none; background: none; text-align: left; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .menu button:hover { background: rgba(127,127,127,0.16); }
+        .menu .cancel { color: var(--secondary-text-color); }
+      </style>
+      <ha-card style="--mac-accent: ${escapeHtml(accent)}">
+        ${title ? `<div class="header">${escapeHtml(title)}</div>` : ''}
+        ${body}
+        ${this._menu ? `
+          <div class="overlay"><div class="menu" role="menu">
+            <h3>${escapeHtml(this._menu.media_title)}</h3>
+            <button data-service="play_queue_item">${escapeHtml(t(lang, 'play_now'))}</button>
+            <button data-service="move_queue_item_next">${escapeHtml(t(lang, 'play_next'))}</button>
+            <button data-service="remove_queue_item">${escapeHtml(t(lang, 'remove'))}</button>
+            <button class="cancel" data-close>${escapeHtml(t(lang, 'cancel'))}</button>
+          </div></div>` : ''}
+      </ha-card>`;
+    this._bind(items);
+  }
+
+  _bind(items) {
+    const root = this.shadowRoot;
+    root.querySelectorAll('.thumb img').forEach((img) => img.addEventListener('error', () => {
+      img.replaceWith(Object.assign(document.createElement('ha-icon'), { icon: 'mdi:music-note' }));
+    }, { once: true }));
+    root.querySelectorAll('.row').forEach((el) => {
+      const item = items[Number(el.dataset.index)];
+      let timer = null;
+      let longPressed = false;
+      const cancel = () => clearTimeout(timer);
+      el.addEventListener('pointerdown', () => {
+        longPressed = false;
+        timer = setTimeout(() => {
+          longPressed = true;
+          this._menu = item;
+          this._render();
+        }, LONG_PRESS_MS);
+      });
+      el.addEventListener('pointerup', cancel);
+      el.addEventListener('pointerleave', cancel);
+      el.addEventListener('pointercancel', cancel);
+      el.addEventListener('contextmenu', (event) => event.preventDefault());
+      el.addEventListener('click', () => {
+        if (!longPressed && !item.current) this._act('play_queue_item', item);
+      });
+    });
+    const overlay = root.querySelector('.overlay');
+    if (!overlay) return;
+    const close = () => {
+      this._menu = null;
+      this._render();
+    };
+    overlay.addEventListener('click', (event) => event.target === overlay && close());
+    overlay.querySelector('[data-close]').addEventListener('click', close);
+    overlay.querySelectorAll('[data-service]').forEach((button) => button.addEventListener('click', () => {
+      const item = this._menu;
+      this._menu = null;
+      this._render();
+      this._act(button.dataset.service, item);
+    }));
+  }
+}
+
+/* ---------------------------------------------------------------- */
 /* Mood buttons                                                      */
 /* ---------------------------------------------------------------- */
 
@@ -551,6 +779,7 @@ if (typeof customElements !== 'undefined') {
   const cards = [
     ['ma-playlist-grid', MaPlaylistGrid, 'MA Playlist Grid', 'Music Assistant playlists as a grid of covers; tap to play.'],
     ['ma-now-playing', MaNowPlaying, 'MA Now Playing', 'What is playing, with controls and volume.'],
+    ['ma-queue', MaQueue, 'MA Queue', 'The play queue from the current track on; tap to jump, hold for more.'],
     ['mood-buttons', MoodButtons, 'Mood Buttons', 'Big buttons that run a script and show the active mood.']
   ];
   window.customCards = window.customCards || [];

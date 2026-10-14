@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { selectPlaylists, formatDuration, isActiveMood, resolveLanguage, t } from '../dist/music-assistant-cards.js';
+import { selectPlaylists, formatDuration, isActiveMood, resolveLanguage, t, upcomingItems, queueImage } from '../dist/music-assistant-cards.js';
 
 const library = [
   { name: 'Infinite Mix (library)', uri: 'library://playlist/7', image: 'a.jpg' },
@@ -36,4 +36,23 @@ test('language follows Home Assistant', () => {
   assert.equal(resolveLanguage({ locale: { language: 'pt-BR' } }), 'pt');
   assert.equal(t('pt', 'play_next'), 'Tocar a seguir');
   assert.equal(t('en', 'play_next'), 'Play next');
+});
+
+test('the queue starts at the current item and keeps the limit', () => {
+  const items = [{ queue_item_id: 'a' }, { queue_item_id: 'b' }, { queue_item_id: 'c' }, { queue_item_id: 'd' }];
+  const up = upcomingItems(items, 'b', 2);
+  assert.deepEqual(up.map((i) => i.queue_item_id), ['b', 'c']);
+  assert.equal(up[0].current, true);
+  assert.equal(up[1].current, false);
+  assert.deepEqual(upcomingItems(items, 'zz', 2).map((i) => i.queue_item_id), ['a', 'b']);
+  assert.deepEqual(upcomingItems(null, 'a', 3), []);
+});
+
+test('queue images prefer the encoded copy and skip plain HTTP on HTTPS pages', () => {
+  assert.equal(queueImage({ local_image_encoded: 'data:image;base64,AAA', media_image: 'http://x/a.jpg' }, true), 'data:image;base64,AAA');
+  assert.equal(queueImage({ local_image_encoded: 'AAA' }, true), 'data:image;base64,AAA');
+  assert.equal(queueImage({ media_image: 'http://x/a.jpg' }, true), null);
+  assert.equal(queueImage({ media_image: 'http://x/a.jpg' }, false), 'http://x/a.jpg');
+  assert.equal(queueImage({ media_image: 'https://i.scdn.co/a.jpg' }, true), 'https://i.scdn.co/a.jpg');
+  assert.equal(queueImage({}, false), null);
 });
